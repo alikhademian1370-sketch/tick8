@@ -1,77 +1,70 @@
 // ═══════════════════════════════════════════════
 //  تیک‌۸ — Service Worker
-//  نسخه cache رو هر بار که آپدیت می‌دی عوض کن
-//  مثلاً: CACHE_NAME = 'tick8-v1.0.1'
+//  هر بار آپدیت: فقط CACHE_NAME رو عوض کن
+//  مثلاً: tick8-v1.0.1 → tick8-v1.0.2
 // ═══════════════════════════════════════════════
 const CACHE_NAME = 'tick8-v1.0.0';
 
-// فایل‌هایی که باید cache بشن برای آفلاین
-const CACHE_FILES = [
+const CORE_FILES = [
   './index.html',
   './manifest.json',
-  'https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;700;900&display=swap',
+  './version.json',
+  './icons/icon-192.png',
+  './icons/icon-512.png',
 ];
 
 // ─── نصب ───
 self.addEventListener('install', event => {
-  // منتظر نمون — همین الان فعال شو
   self.skipWaiting();
   event.waitUntil(
     caches.open(CACHE_NAME).then(cache => {
-      // فونت رو جداگانه cache می‌کنیم چون ممکنه fail بشه
-      return cache.addAll([
-        './index.html',
-        './manifest.json',
-      ]).then(() => {
-        // فونت با no-cors
-        return fetch('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;700;900&display=swap', {mode:'no-cors'})
-          .then(r => cache.put('vazirmatn-font', r))
-          .catch(() => {}); // اگه offline بود skip کن
-      });
+      return cache.addAll(CORE_FILES)
+        .then(() => {
+          return fetch('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;700;900&display=swap', {mode:'no-cors'})
+            .then(r => cache.put('vazirmatn-font', r))
+            .catch(() => {});
+        });
     })
   );
 });
 
-// ─── فعال‌سازی (حذف cache قدیمی) ───
+// ─── فعال‌سازی ───
 self.addEventListener('activate', event => {
   event.waitUntil(
-    caches.keys().then(keys => {
-      return Promise.all(
-        keys
-          .filter(key => key !== CACHE_NAME)
-          .map(key => {
-            console.log('[SW] حذف cache قدیمی:', key);
-            return caches.delete(key);
-          })
-      );
-    }).then(() => self.clients.claim())
+    caches.keys().then(keys =>
+      Promise.all(
+        keys.filter(k => k !== CACHE_NAME).map(k => {
+          console.log('[SW] حذف cache قدیمی:', k);
+          return caches.delete(k);
+        })
+      )
+    ).then(() => self.clients.claim())
   );
 });
 
-// ─── fetch — استراتژی: Network First برای HTML، Cache First برای بقیه ───
+// ─── fetch ─── Network First برای HTML و version.json، Cache First برای بقیه
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
 
-  // درخواست‌های API و سرور رو cache نکن
-  if(url.pathname.startsWith('/api/') || url.pathname.includes('version.json')){
-    event.respondWith(fetch(event.request).catch(() => new Response('{}', {headers:{'Content-Type':'application/json'}})));
+  // version.json — همیشه از شبکه (تا آپدیت رو ببینه)
+  if(url.pathname.includes('version.json')){
+    event.respondWith(
+      fetch(event.request, {cache: 'no-store'})
+        .catch(() => caches.match(event.request))
+    );
     return;
   }
 
-  // فایل HTML اصلی — Network First (همیشه آخرین نسخه)
-  if(event.request.url.includes('index.html') || event.request.url.endsWith('/')){
+  // HTML اصلی — Network First
+  if(url.pathname.endsWith('/') || url.pathname.includes('index.html')){
     event.respondWith(
       fetch(event.request)
         .then(response => {
-          // نسخه جدید رو cache کن
           const clone = response.clone();
           caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
           return response;
         })
-        .catch(() => {
-          // offline — از cache برگردون
-          return caches.match(event.request).then(r => r || caches.match('./index.html'));
-        })
+        .catch(() => caches.match(event.request).then(r => r || caches.match('./index.html')))
     );
     return;
   }
